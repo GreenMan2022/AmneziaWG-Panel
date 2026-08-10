@@ -1,21 +1,19 @@
 # AmneziaWG Panel
 
-**🌐 Read this in other languages:**  
-[🇷🇺 Русский](README.ru.md) | [🇩🇪 Deutsch](README.de.md) | [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md
+**🌐 Read this in other languages:**
+[🇬🇧 English](README.md) | [🇷🇺 Русский](README.ru.md) | [🇩🇪 Deutsch](README.de.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md) | [🇯🇵 日本語](README.ja.md) | [🇰🇷 한국어](README.ko.md) | [🇸🇦 العربية](README.ar.md)
 
+Web panel for managing an [AmneziaWG](https://github.com/amnezia-vpn/amneziawg) (AWG) VPN server with authentication, client config generation, QR codes, expiration dates and a config-sharing detector.
 
-Web-панель управления VPN-сервером [AmneziaWG](https://github.com/amnezia-vpn/amneziawg) (AWG) с
-аутентификацией, выдачей клиентских конфигов, QR-кодов, сроков действия и детектором раздачи конфига.
+- **panel.py** — web panel (Python standard library only, no dependencies). Default port `8000`, secret admin path `/1q2w3e4r` (everything else returns 404).
+- **panelctl** — CLI tool: add/extend/remove clients, status, statistics.
+- **install.sh** — deploys the whole project on a new server with a single command.
+- **install_amneziawg.sh** — AmneziaWG 2.0 installer (non-interactive mode supported).
+- **connection_limit.sh** — config-sharing detector and blocker (multiple devices on a single key).
 
-- **panel.py** — веб-панель (только стандартная библиотека Python, без зависимостей). Порт по умолчанию `8000`, секретный путь админки `/1q2w3e4r` (всё остальное отдаёт 404).
-- **panelctl** — CLI-инструмент: добавление/продление/удаление клиентов, статус, статистика.
-- **install.sh** — развёртывание всего проекта на новом сервере одной командой.
-- **install_amneziawg.sh** — установщик AmneziaWG 2.0 (неинтерактивный режим поддерживается).
-- **connection_limit.sh** — детектор и блокировка раздачи конфига (несколько устройств с одного ключа).
+## Quick Start
 
-## Быстрый старт
-
-На чистом VDS (Ubuntu 24.04 / Debian 12+):
+On a fresh VDS (Ubuntu 24.04 / Debian 12+):
 
 ```bash
 sudo apt update && sudo apt install -y git
@@ -24,60 +22,53 @@ cd panel
 sudo bash install.sh
 ```
 
-Установка занимает несколько минут: ставится AmneziaWG, генерируются случайные секреты панели,
-создаются systemd-сервисы `awg-panel` и `awg-connection-limit`. По завершении скрипт выведет
-адрес панели, логин и пароль администратора.
+Installation takes a few minutes: AmneziaWG gets installed, random panel secrets are generated, and the `awg-panel` and `awg-connection-limit` systemd services are created. When finished, the script prints the panel address, admin login and password.
 
-### Опции install.sh
+### install.sh options
 
-| Опция | Описание | По умолчанию |
+| Option | Description | Default |
 |---|---|---|
-| `--port=N` | UDP-порт сервера AWG | `443` |
-| `--subnet=CIDR` | Подсеть туннеля | `10.9.9.1/24` |
-| `--route=all\|amnezia\|custom:CIDR` | Режим маршрутизации | `all` |
-| `--preset=default\|mobile` | Пресет обфускации | `mobile` |
-| `--no-cps` / `--cps` | Вкл/выкл параметр I1 (CPS) | `--no-cps` |
-| `--skip-awg` | Не трогать установленный AWG, переразвернуть только панель | — |
+| `--port=N` | AWG server UDP port | `443` |
+| `--subnet=CIDR` | Tunnel subnet | `10.9.9.1/24` |
+| `--route=all\|amnezia\|custom:CIDR` | Routing mode | `all` |
+| `--preset=default\|mobile` | Obfuscation preset | `mobile` |
+| `--no-cps` / `--cps` | Enable/disable the I1 (CPS) parameter | `--no-cps` |
+| `--skip-awg` | Leave the installed AWG untouched, redeploy only the panel | — |
 
-Пример: `sudo bash install.sh --port=51820 --subnet=10.0.0.1/24`
+Example: `sudo bash install.sh --port=51820 --subnet=10.0.0.1/24`
 
-## Использование
+## Usage
 
-Админ-панель: `http://<IP>:8000/1q2w3e4r` (секретный путь можно изменить в `panel.py`, константа `ADMIN_PATH`).
+Admin panel: `http://<IP>:8000/1q2w3e4r` (the secret path can be changed in `panel.py`, constant `ADMIN_PATH`).
 
-CLI (от root):
+CLI (as root):
 
 ```bash
-sudo panelctl status              # статус панели и сервисов
-sudo panelctl add <имя>           # выдать клиента (срок 30 дней)
-sudo panelctl extend <имя> <дни>  # продлить
-sudo panelctl list                # список клиентов
-sudo panelctl blocked             # заблокированные за раздачу
-sudo panelctl remove <имя>        # удалить клиента
-sudo panelctl config              # конфиг панели
+sudo panelctl status              # panel and service status
+sudo panelctl add <name>          # create a client (30-day period)
+sudo panelctl extend <name> <days> # extend
+sudo panelctl list                # client list
+sudo panelctl blocked             # blocked for sharing
+sudo panelctl remove <name>       # remove a client
+sudo panelctl config              # panel config
 ```
 
-## Безопасность
+## Security
 
-- Пароль админа и соли **генерируются случайно** при установке и хранятся в `/root/awg/panel.env`
-  (chmod 600). Панель читает их из переменных окружения (`PANEL_ADMIN_USER`, `PANEL_ADMIN_PASSWORD`,
-  `PANEL_HASH_SALT`, `PANEL_CLIENT_AUTH_SALT`). Без переменных используются встроенные значения
-  **только для разработки** — на боевом сервере они не должны применяться.
-- Директория `/root/awg/` содержит приватные ключи сервера и клиентов. Она исключена из git
-  через `.gitignore` — никогда не публикуйте её.
-- Путь админ-панели `/1q2w3e4r` скрывает интерфейс от сканеров (корень отдаёт 404), но это не
-  замена паролю: дополнительно ограничьте доступ (nginx, firewall) при необходимости.
+- Admin password and salts are **randomly generated** during installation and stored in `/root/awg/panel.env` (chmod 600). The panel reads them from environment variables (`PANEL_ADMIN_USER`, `PANEL_ADMIN_PASSWORD`, `PANEL_HASH_SALT`, `PANEL_CLIENT_AUTH_SALT`). Without these variables, built-in values are used **for development only** — they must not be used on a production server.
+- The `/root/awg/` directory contains the server and client private keys. It is excluded from git via `.gitignore` — never publish it.
+- The `/1q2w3e4r` admin path hides the interface from scanners (the root returns 404), but it is not a substitute for a password: additionally restrict access (nginx, firewall) if needed.
 
-## Структура проекта
+## Project Structure
 
 ```
-install.sh               # развёртывание на новом VDS
-install_amneziawg.sh     # установщик AmneziaWG 2.0 (форк amneziawg-installer)
-panel.py                 # веб-панель (stdlib Python)
-panelctl                 # CLI-инструмент управления
-connection_limit.sh      # детектор раздачи конфига
+install.sh               # deployment on a fresh VDS
+install_amneziawg.sh     # AmneziaWG 2.0 installer (fork of amneziawg-installer)
+panel.py                 # web panel (stdlib Python)
+panelctl                 # CLI management tool
+connection_limit.sh      # config-sharing detector
 ```
 
-## Лицензия
+## License
 
-Проект основан на [amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
+The project is based on [amneziawg-installer](https://github.com/bivlked/amneziawg-installer).
