@@ -15,7 +15,7 @@ Web-панель управления VPN-сервером [AmneziaWG](https://g
 
 ```bash
 sudo apt update && sudo apt install -y git
-git clone <URL-репозитория> panel
+git clone <https://github.com/GreenMan2022/AmneziaWG-Panel/> panel
 cd panel
 sudo bash install.sh
 ```
