@@ -1,7 +1,7 @@
 # AmneziaWG Panel
 
 **🌐 Читать на других языках:**  
-[🇬🇧 English](README.md) | [🇩🇪 Deutsch](README.de.md) | [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md)]
+[🇬🇧 English](README.md) | [🇩🇪 Deutsch](README.de.md) | [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md)
 
 Веб-панель управления VPN-сервером AmneziaWG (AWG) с аутентификацией, выдачей клиентских конфигов, QR-кодов, сроков действия и детектором раздачи конфига.
 
@@ -10,10 +10,10 @@
 На чистом VDS (Ubuntu 24.04 / Debian 12+):
 
 ```bash
-sudo apt update && sudo apt install -y git
+[sudo apt update && sudo apt install -y git
 git clone https://github.com/GreenMan2022/AmneziaWG-Panel/ panel
 cd panel
-sudo bash install.sh
+sudo bash install.sh)
 
 Установка занимает несколько минут: ставится AmneziaWG, генерируются случайные секреты панели, создаются systemd-сервисы awg-panel и awg-connection-limit.
 По завершении скрипт выведет адрес панели, логин и пароль администратора.
