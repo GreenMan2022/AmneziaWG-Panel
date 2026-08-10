@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# panelctl - CLI tool for managing AmneziaWG Panel
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+usage() {
+    echo "Usage: panelctl [COMMAND] [ARGUMENTS]"
+    echo ""
+    echo "Commands:"
+    echo "  status           Show panel and service status"
+    echo "  add <name>       Add a new client"
+    echo "  extend <name> <days>  Extend client subscription by <days> days"
+    echo "  blocked          Show clients blocked for config sharing"
+    echo "  unblock <name>   Unblock a client (remove sharing block)"
+    echo "  remove <name>    Remove an existing client"
+    echo "  list            List all active clients"
+    echo "  restart         Restart the panel service"
+    echo "  config           View/Edit panel configuration"
+    echo "  qr <name>        Display QR code (via terminal/ASCII)"
+    echo ""
+    echo "Options for add:"
+    echo "  --expires <days>  Set expiration (e.g., 30d, 90d)"
+    echo ""
+    exit 1
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+       log_error "This script must be run as root"
+       exit 1
+    fi
+}
+
+get_panel_status() {
+    local port=$(grep "^port=" /root/awg/panel.conf | cut -d'=' -f2 || echo "8000")
+    echo "--- AmneziaWG Panel Status ---"
+    echo "Panel Port: $port"
+    if ss -lnt | grep -q ":$port "; then
+        echo -e "Panel State: ${GREEN}RUNNING${NC}"
+    else
+        echo -e "Panel State: ${RED}STOPPED${NC}"
+    fi
+    
+    echo ""
+    echo "--- AmneziaWG Service Status ---"
+    if systemctl is-active --quiet awg-quick@awg0; then
+        echo -e "AWG Service: ${GREEN}ACTIVE${NC}"
+    else
+        echo -e "AWG Service: ${RED}INACTIVE${NC}"
+    fi
+}
+
+list_clients() {
+    echo "Fetching client list..."
+    /usr/bin/python3 -c "
+import urllib.request, json, sys
+try:
+    with urllib.request.urlopen('http://localhost:8000/api/clients') as response:
+        clients = json.loads(response.read().decode())
+        if not clients:
+            print('No clients found.')
+            sys.exit(0)
+        print(f'{\"NAME\":<20} | {\"IP Address\":<15} | {\"Status\":<10}')
+        print('-'*50)
+        for c in clients:
+            name = c.get('name', 'unknown')
+            ip = c.get('ip', '-')
+            status = c.get('status', 'Unknown')
+            print(f'{name:<20} | {ip:<15} | {status:<10}')
+except Exception as e:
+    print(f'Error: {e}')
+    sys.exit(1)
+"
+}
+
+add_client() {
+    local name=$1
+    local expires=$2
+    if [[ -z "$name" ]]; then
+        log_error "Client name is required"
+        usage
+    fi
+    
+    local cmd="/root/awg/manage_amneziawg.sh add $name"
+    [[ -n "$expires" ]] && cmd="$cmd --expires=$expires"
+    
+    log_info "Adding client: $name..."
+    if eval "$cmd"; then
+        log_success "Client $name added successfully"
+    else
+        log_error "Failed to add client $name"
+    fi
+}
+
+remove_client() {
+    local name=$1
+    if [[ -z "$name" ]]; then
+        log_error "Client name is required"
+        usage
+    fi
+    
+    log_warn "Removing client: $name"
+    if /root/awg/manage_amneziawg.sh remove "$name" --yes; then
+        log_success "Client $name removed"
+    else
+        log_error "Failed to remove client $name"
+    fi
+}
+
+extend_client() {
+    local name=$1
+    local days=$2
+    if [[ -z "$name" || -z "$days" ]]; then
+        log_error "Usage: panelctl extend <name> <days>"
+        usage
+    fi
+    if ! [[ "$days" =~ ^[0-9]+$ ]] || [[ "$days" -lt 1 || "$days" -gt 365 ]]; then
+        log_error "Days must be a number from 1 to 365"
+        usage
+    fi
+
+    log_info "Extending client $name by $days days..."
+    if /root/awg/manage_amneziawg.sh extend "$name" --expires="${days}d"; then
+        log_success "Client $name extended by $days days"
+    else
+        log_error "Failed to extend client $name"
+    fi
+}
+
+blocked_clients() {
+    local bfile="/var/log/awg/blocked_ips"
+    local lfile="/var/log/awg/limit.log"
+    if [[ ! -s "$bfile" ]]; then
+        log_info "Нет заблокированных клиентов."
+        return 0
+    fi
+    echo "--- Заблокированные (раздача конфига) ---"
+    local ip name
+    while IFS= read -r ip; do
+        [[ -z "$ip" ]] && continue
+        name=$(awk -v ip="$ip" '
+            $1=="[Peer]" {inpeer=1; nm=""; next}
+            inpeer && $1=="#_Name" {nm=$3; next}
+            inpeer && $1=="AllowedIPs" && index($0, ip) {print nm; exit}
+        ' /etc/amnezia/amneziawg/awg0.conf)
+        echo "  $ip  (${name:-?})"
+    done < "$bfile"
+    echo ""
+    log_info "Последние события:"
+    grep -E "БЛОК|ВНИМАНИЕ" "$lfile" 2>/dev/null | tail -5
+}
+
+unblock_client() {
+    local name="$1"
+    if [[ -z "$name" ]]; then
+        log_error "Usage: panelctl unblock <name>"
+        usage
+    fi
+    local ip
+    ip=$(awk -v n="$name" '
+        $1=="[Peer]" {inpeer=1; nm=""; next}
+        inpeer && $1=="#_Name" && $3==n {nm=$3}
+        inpeer && nm && $1=="AllowedIPs" {for(i=3;i<=NF;i++){gsub(/,/,"",$i); if($i ~ /^10\./) {print $i; exit}}}
+    ' /etc/amnezia/amneziawg/awg0.conf)
+    if [[ -z "$ip" ]]; then
+        log_error "Клиент '$name' не найден в конфиге."
+        return 1
+    fi
+    iptables -D FORWARD -s "$ip" -j DROP 2>/dev/null
+    grep -v -F -x "$ip" /var/log/awg/blocked_ips 2>/dev/null > /var/log/awg/blocked_ips.tmp
+    mv /var/log/awg/blocked_ips.tmp /var/log/awg/blocked_ips 2>/dev/null
+    log_success "Клиент $name ($ip) разблокирован."
+}
+
+main() {
+    check_root
+    case "$1" in
+        status) get_panel_status ;;
+        add)
+            shift
+            local name=""
+            local expires=""
+            while [[ "$#" -gt 0 ]]; do
+                case $1 in
+                    --expires) expires="$2"; shift ;;
+                    *) name="$1" ;;
+                esac
+                shift
+            done
+            add_client "$name" "$expires"
+            ;;
+        remove)
+            shift
+            remove_client "$1"
+            ;;
+        extend)
+            shift
+            extend_client "$1" "$2"
+            ;;
+        blocked)
+            blocked_clients
+            ;;
+        unblock)
+            shift
+            unblock_client "$1"
+            ;;
+        list)
+            list_clients
+            ;;
+        restart)
+            log_info "Restarting panel..."
+            systemctl restart awg-panel
+            log_success "Panel restarted via systemd (awg-panel)"
+            ;;
+        config)
+            cat /root/awg/panel.conf
+            ;;
+        *)
+            usage
+            ;;
+    esac
+}
+
+main "$@"
