@@ -26,6 +26,10 @@ usage() {
     echo "  unblock <name>   Unblock a client (remove sharing block)"
     echo "  remove <name>    Remove an existing client"
     echo "  list            List all active clients"
+    echo "  whitelist        List whitelist entries (excluded from sharing-block)"
+    echo "  whitelist add <name|IP|CIDR>   Add entry to whitelist"
+    echo "  whitelist remove <entry>       Remove entry from whitelist"
+    echo "  passwd          Change admin panel password"
     echo "  restart         Restart the panel service"
     echo "  config           View/Edit panel configuration"
     echo "  qr <name>        Display QR code (via terminal/ASCII)"
@@ -184,6 +188,80 @@ unblock_client() {
     log_success "Клиент $name ($ip) разблокирован."
 }
 
+whitelist_cmd() {
+    local action="$1" entry="$2"
+    local file="/var/log/awg/whitelist"
+    case "$action" in
+        list)
+            if [[ ! -s "$file" ]]; then
+                log_info "Whitelist пуст."
+                return 0
+            fi
+            echo "--- Whitelist (исключены из блокировки за раздачу) ---"
+            cat "$file"
+            ;;
+        add)
+            if [[ -z "$entry" ]]; then
+                log_error "Usage: panelctl whitelist add <name|IP|CIDR>"
+                return 1
+            fi
+            touch "$file"
+            if grep -qxF "$entry" "$file"; then
+                log_warn "$entry уже в whitelist."
+                return 0
+            fi
+            echo "$entry" >> "$file"
+            log_success "Добавлено в whitelist: $entry"
+            ;;
+        remove)
+            if [[ -z "$entry" ]]; then
+                log_error "Usage: panelctl whitelist remove <entry>"
+                return 1
+            fi
+            if ! grep -qxF "$entry" "$file" 2>/dev/null; then
+                log_error "Запись '$entry' не найдена в whitelist."
+                return 1
+            fi
+            grep -v -F -x "$entry" "$file" > "$file.tmp" 2>/dev/null
+            mv "$file.tmp" "$file" 2>/dev/null
+            log_success "Удалено из whitelist: $entry"
+            ;;
+        *)
+            log_error "Usage: panelctl whitelist [list|add <entry>|remove <entry>]"
+            return 1
+            ;;
+    esac
+}
+
+change_password() {
+    local env_file="/root/awg/panel.env"
+    if [[ ! -f "$env_file" ]]; then
+        log_error "Не найден $env_file"
+        return 1
+    fi
+    read -rsp "Новый пароль для админа: " new_pass < /dev/tty
+    echo ""
+    if [[ -z "$new_pass" ]]; then
+        log_error "Пароль не может быть пустым."
+        return 1
+    fi
+    read -rsp "Повторите пароль: " confirm < /dev/tty
+    echo ""
+    if [[ "$new_pass" != "$confirm" ]]; then
+        log_error "Пароли не совпадают."
+        return 1
+    fi
+
+    if grep -q '^PANEL_ADMIN_PASSWORD=' "$env_file"; then
+        sed -i "s|^PANEL_ADMIN_PASSWORD=.*|PANEL_ADMIN_PASSWORD=$new_pass|" "$env_file"
+    else
+        echo "PANEL_ADMIN_PASSWORD=$new_pass" >> "$env_file"
+    fi
+    chmod 600 "$env_file"
+    systemctl restart awg-panel
+    log_success "Пароль админа обновлён, панель перезапущена."
+}
+
 main() {
     check_root
     case "$1" in
@@ -215,6 +293,13 @@ main() {
         unblock)
             shift
             unblock_client "$1"
+            ;;
+        whitelist)
+            shift
+            whitelist_cmd "$1" "$2"
+            ;;
+        passwd)
+            change_password
             ;;
         list)
             list_clients

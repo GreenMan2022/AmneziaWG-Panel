@@ -9,9 +9,65 @@ import urllib.parse
 
 HASH_SALT = os.environ.get("PANEL_HASH_SALT", "amnezia_panel_2026")
 CLIENT_AUTH_SALT = os.environ.get("PANEL_CLIENT_AUTH_SALT", "amnezia_client_auth_2026")
+
+CONF_FILE = "/root/awg/panel.conf"
+
+
+def _load_conf():
+    cfg = {}
+    try:
+        with open(CONF_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                cfg[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return cfg
+
+
+PANEL_CONF = _load_conf()
+
+
+def conf_get(key, default=None):
+    return PANEL_CONF.get(key, default)
+
+
+def parse_config(text):
+    """Разбирает .conf (Interface/Peer) в плоский словарь key -> value."""
+    cfg = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('[') or '=' not in line:
+            continue
+        k, v = line.split('=', 1)
+        cfg[k.strip()] = v.strip()
+    return cfg
+
+
 # Секретный путь админ-панели: всё, кроме /client/, доступно только по этому
 # пути. Корень "/" отдаёт 404, чтобы скрипт-сканеры не находили панель.
-ADMIN_PATH = "/1q2w3e4r"
+# Задаётся через env PANEL_ADMIN_PATH или admin_path в panel.conf; если не
+# задан — генерируется случайно при первом запуске и сохраняется в panel.conf.
+ADMIN_PATH = (os.environ.get("PANEL_ADMIN_PATH") or conf_get("admin_path") or "/1q2w3e4r")
+
+if not os.environ.get("PANEL_ADMIN_PATH") and not conf_get("admin_path"):
+    ADMIN_PATH = "/" + secrets.token_hex(8)
+    try:
+        with open(CONF_FILE, "a") as f:
+            f.write(f"\nadmin_path={ADMIN_PATH}\n")
+    except OSError:
+        pass
+
+PANEL_HOST = conf_get("host") or "0.0.0.0"
+try:
+    PANEL_PORT = int(conf_get("port") or 8000)
+except ValueError:
+    PANEL_PORT = 8000
+
+AUTH_LOG = conf_get("auth_log") or "/var/log/awg/panel_auth.log"
 
 
 def generate_client_password(length=10):
@@ -197,6 +253,7 @@ class Handler(BaseHTTPRequestHandler):
     def handle_login(self, params):
         username = params.get('username', [''])[0]
         password = params.get('password', [''])[0]
+        client_ip = self.client_address[0] if self.client_address else '?'
         
         if username in USERS_DB and verify_password(password, USERS_DB[username]):
             session_id = create_session(username)
@@ -205,6 +262,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Location', ADMIN_PATH)
             self.end_headers()
         else:
+            try:
+                with open(AUTH_LOG, "a") as f:
+                    f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                            f"Failed login for user '{username}' from {client_ip}\n")
+            except OSError:
+                pass
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.send_header('Cache-Control', 'no-store')
@@ -1364,10 +1427,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     print("✅ AmneziaWG Panel v2.0")
-    print("📡 Running on http://0.0.0.0:8000")
+    print(f"📡 Running on http://{PANEL_HOST}:{PANEL_PORT}")
+    print(f"🔑 Админ-путь: {ADMIN_PATH}")
     print("📅 Теперь можно указывать произвольный срок действия (1-365 дней)")
     
-    ThreadingHTTPServer(('0.0.0.0', 8000), Handler).serve_forever()
+    ThreadingHTTPServer((PANEL_HOST, PANEL_PORT), Handler).serve_forever()
 
 if __name__ == '__main__':
     main()

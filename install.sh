@@ -7,7 +7,9 @@
 #   2) Копирует panel.py, panelctl и connection_limit.sh в /root и /root/awg;
 #   3) Генерирует случайные секреты панели (пароль админа, соли) -> /root/awg/panel.env;
 #   4) Создаёт конфиг панели /root/awg/panel.conf;
-#   5) Регистрирует и запускает systemd-сервисы (панель + детектор раздачи).
+#   5) Открывает порт панели в UFW и ставит fail2ban-джейл на её логин;
+#   6) Устанавливает dnsmasq для логов DNS (страница /dns в панели);
+#   7) Регистрирует и запускает systemd-сервисы (панель + детектор раздачи).
 #
 # Использование: sudo bash install.sh [ОПЦИИ]
 #
@@ -17,6 +19,7 @@
 #   --route=all|amnezia|custom:CIDR
 #   --preset=default|mobile
 #   --no-cps|--cps  Управление параметром I1 (по умолчанию --no-cps)
+#   --panel-port=N  TCP порт веб-панели (по умолчанию 8000)
 #   --skip-awg      Не переустанавливать AmneziaWG (только переразвернуть панель)
 # =============================================================================
 
@@ -45,6 +48,7 @@ AWG_SUBNET="10.9.9.1/24"
 ROUTE_FLAG="--route-all"
 PRESET_FLAG="--preset=mobile"
 CPS_FLAG="--no-cps"
+PANEL_PORT=8000
 SKIP_AWG=0
 
 while [[ $# -gt 0 ]]; do
@@ -57,9 +61,10 @@ while [[ $# -gt 0 ]]; do
         --preset=*) PRESET_FLAG="--preset=${1#*=}" ;;
         --no-cps)   CPS_FLAG="--no-cps" ;;
         --cps)      CPS_FLAG="" ;;
+        --panel-port=*) PANEL_PORT="${1#*=}" ;;
         --skip-awg) SKIP_AWG=1 ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) die "Неизвестный аргумент: $1 (см. --help)" ;;
     esac
@@ -122,12 +127,12 @@ EOF
     log_warn  "Сохраните его — он больше нигде не будет показан."
 fi
 
-# --- 4. Конфиг панели (используется panelctl) --------------------------------
+# --- 4. Конфиг панели (используется panel.py и panelctl) ---------------------
 if [[ ! -f "$CONF_FILE" ]]; then
     cat > "$CONF_FILE" << EOF
 # AmneziaWG Panel configuration
 host=0.0.0.0
-port=8000
+port=$PANEL_PORT
 require_auth=true
 session_timeout=3600
 default_expires=30d
@@ -142,6 +147,73 @@ enable_client_notes=true
 show_connection_stats=true
 EOF
     chmod 600 "$CONF_FILE"
+else
+    if grep -q '^port=' "$CONF_FILE"; then
+        sed -i "s/^port=.*/port=$PANEL_PORT/" "$CONF_FILE"
+    else
+        echo "port=$PANEL_PORT" >> "$CONF_FILE"
+    fi
+fi
+
+# --- 4.1 UFW: открыть порт панели --------------------------------------------
+if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+    log_info "Открываю порт панели ${PANEL_PORT}/tcp в UFW..."
+    if ! ufw status 2>/dev/null | grep -q "^${PANEL_PORT}/tcp"; then
+        ufw allow "${PANEL_PORT}/tcp" comment "AmneziaWG Panel" >/dev/null 2>&1 \
+            && log_success "UFW: разрешён ${PANEL_PORT}/tcp (панель)"
+    fi
+fi
+
+# --- 4.2 fail2ban: защита логина панели --------------------------------------
+if command -v fail2ban-client &>/dev/null; then
+    log_info "Настраиваю fail2ban-джейл для панели..."
+    mkdir -p /etc/fail2ban/filter.d
+    cat > /etc/fail2ban/filter.d/awg-panel.conf << EOF
+[Definition]
+failregex = Failed login for user .* from <HOST>
+ignoreregex =
+EOF
+    cat > /etc/fail2ban/jail.d/awg-panel.conf << EOF
+[awg-panel]
+enabled = true
+port = $PANEL_PORT
+filter = awg-panel
+logpath = /var/log/awg/panel_auth.log
+maxretry = 5
+findtime = 10m
+bantime = 1h
+banaction = ufw
+EOF
+    touch /var/log/awg/panel_auth.log
+    chmod 600 /var/log/awg/panel_auth.log
+    if command -v systemctl &>/dev/null; then
+        systemctl restart fail2ban >/dev/null 2>&1 || true
+    fi
+    log_success "fail2ban: джейл awg-panel активен (макс. 5 попыток / 10 мин)"
+fi
+
+# --- 4.3 dnsmasq: логи DNS для страницы /dns ----------------------------------
+if ! command -v dnsmasq &>/dev/null; then
+    log_info "Устанавливаю dnsmasq (логи DNS для панели)..."
+    if command -v apt-get &>/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq >/dev/null 2>&1 \
+            && log_success "dnsmasq установлен" \
+            || log_warn "Не удалось установить dnsmasq — страница /dns будет пустой"
+    fi
+fi
+if command -v dnsmasq &>/dev/null; then
+    cat > /etc/dnsmasq.d/awg.conf << EOF
+# Создан install.sh: логи DNS для панели (страница /dns).
+interface=awg0
+bind-interfaces
+listen-address=${AWG_SUBNET%/*}
+log-queries
+log-facility=/var/log/dnsmasq.log
+server=1.1.1.1
+server=8.8.8.8
+EOF
+    systemctl restart dnsmasq >/dev/null 2>&1 || true
+    log_success "dnsmasq: логи DNS включены (/var/log/dnsmasq.log)"
 fi
 
 # --- 5. systemd-сервисы ------------------------------------------------------
@@ -205,7 +277,8 @@ fi
 sleep 1
 if systemctl is-active --quiet "$SERVICE_NAME"; then
     log_success "=== Установка завершена ==="
-    echo -e "${GREEN}Админ-панель:${NC} http://$(curl -4 -s ifconfig.me || echo '<IP-сервера>'):8000/1q2w3e4r"
+    ADMIN_PATH="$(grep '^admin_path=' "$CONF_FILE" 2>/dev/null | cut -d= -f2 || echo '/1q2w3e4r')"
+    echo -e "${GREEN}Админ-панель:${NC} http://$(curl -4 -s ifconfig.me || echo '<IP-сервера>'):${PANEL_PORT}${ADMIN_PATH}"
     echo -e "${GREEN}Логин:${NC}     $(grep PANEL_ADMIN_USER "$ENV_FILE" | cut -d= -f2)"
     echo -e "${GREEN}Пароль:${NC}     $(grep PANEL_ADMIN_PASSWORD "$ENV_FILE" | cut -d= -f2)"
     echo ""
