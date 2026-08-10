@@ -14,7 +14,7 @@ sudo apt update && sudo apt install -y git
 git clone https://github.com/GreenMan2022/AmneziaWG-Panel/ panel
 cd panel
 sudo bash install.sh
-
+```
 Установка занимает несколько минут: ставится AmneziaWG, генерируются случайные секреты панели, создаются systemd-сервисы awg-panel и awg-connection-limit.
 По завершении скрипт выведет адрес панели, логин и пароль администратора.
 
