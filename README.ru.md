@@ -1,7 +1,7 @@
 # AmneziaWG Panel
 
 **🌐 Читать на других языках:**  
-[🇬🇧 English](README.md) | [🇩🇪 Deutsch](README.de.md) | [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md)
+[🇬🇧 English](README.md) | [🇩🇪 Deutsch](README.de.md) | [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇨🇳 中文](README.zh.md)]
 
 Веб-панель управления VPN-сервером AmneziaWG (AWG) с аутентификацией, выдачей клиентских конфигов, QR-кодов, сроков действия и детектором раздачи конфига.
 
