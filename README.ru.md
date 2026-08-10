@@ -28,6 +28,7 @@ sudo apt update && sudo apt install -y git
 git clone https://github.com/GreenMan2022/AmneziaWG-Panel/ panel
 cd panel
 sudo bash install.sh
+---
 
 Установка занимает несколько минут:
 
